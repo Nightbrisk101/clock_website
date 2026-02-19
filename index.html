@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interactive Clock</title>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+        font-family: Arial, sans-serif;
+        background: #eef2ff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        gap: 20px;
+    }
+
+    canvas {
+        background: #fff;
+        border-radius: 50%;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        touch-action: none;
+        cursor: grab;
+        display: block;
+    }
+
+    canvas.dragging { cursor: grabbing; }
+
+    .digital {
+        font-size: 30px;
+        font-weight: bold;
+        font-family: Arial, sans-serif;
+        user-select: none;
+    }
+
+    .controls {
+        display: flex;
+        gap: 10px;
+    }
+
+    .controls button {
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        padding: 8px 18px;
+        border: 2px solid #555;
+        border-radius: 20px;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+    }
+
+    .controls button.active {
+        background: #333;
+        color: #fff;
+        border-color: #333;
+    }
+
+    #btnNow {
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        padding: 8px 24px;
+        border: 2px solid #555;
+        border-radius: 20px;
+        background: #fff;
+        color: #333;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+    }
+
+    #btnNow:hover { background: #eee; }
+
+    .hint {
+        font-size: 12px;
+        color: #999;
+        font-family: Arial, sans-serif;
+    }
+    /* ── GitHub ── */
+.github-btn {
+  position: fixed; bottom: 18px; left: 18px;
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 14px; background: #0a0a0a; color: #999;
+  border: 2px solid #1a1a1a; text-decoration: none;
+  font-size: 12px; font-weight: 600; z-index: 100;
+  transition: all 0.2s;
+}
+.github-btn:hover { border-color: #0066ff; color: #fff; }
+</style>
+</head>
+<body>
+
+<canvas id="clock" width="520" height="520"></canvas>
+<div class="digital" id="digitalTime">12:00 AM</div>
+<div class="controls">
+    <button id="btnBoth" class="active" onclick="setMode('both')">Both</button>
+    <button id="btnHour" onclick="setMode('hour')">Hour only</button>
+    <button id="btnMinute" onclick="setMode('minute')">Minute only</button>
+</div>
+<button id="btnNow" onclick="setToNow()">📍 Set to current time</button>
+<div class="hint">drag hands · click numbers to set hour</div>
+
+<a class="github-btn" href="https://github.com/Nightbrisk101/clock_website" target="_blank" rel="noopener">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+  </svg>
+  GitHub
+</a>
+
+<script>
+const canvas = document.getElementById("clock");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width;
+const center = W / 2;
+const radius = center - 28;
+
+// State: hours (0–23 float) and minutes (0–59 float) stored separately.
+// Hour drag only touches hourF; minute drag only touches minuteF (carrying into hourF).
+let hourF   = 0;   // 0–23, float
+let minuteF = 0;   // 0–59, float
+
+let dragging  = null;
+let dragMode  = "both";
+let prevAngle = null;
+
+// ─── Mode ─────────────────────────────────────────────────────────────────────
+
+function setMode(mode) {
+    dragMode = mode;
+    ["Both","Hour","Minute"].forEach(s => {
+        document.getElementById("btn" + s).classList.toggle("active", mode === s.toLowerCase());
+    });
+}
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+
+function draw() {
+    ctx.clearRect(0, 0, W, W);
+
+    ctx.beginPath();
+    ctx.arc(center, center, radius + 14, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#222";
+    ctx.stroke();
+
+    drawTicks();
+    drawNumbers();
+    drawHands();
+    updateDigital();
+}
+
+function drawTicks() {
+    for (let i = 0; i < 60; i++) {
+        const a = i * Math.PI / 30;
+        const isMajor = i % 5 === 0;
+        const inner = isMajor ? radius - 20 : radius - 10;
+        ctx.beginPath();
+        ctx.lineWidth = isMajor ? 3 : 1;
+        ctx.strokeStyle = "#222";
+        ctx.moveTo(center + Math.sin(a) * inner,  center - Math.cos(a) * inner);
+        ctx.lineTo(center + Math.sin(a) * radius, center - Math.cos(a) * radius);
+        ctx.stroke();
+    }
+}
+
+function drawNumbers() {
+    const h12 = (Math.round(totalMins / 60) % 24) % 12 || 12;
+    for (let n = 1; n <= 12; n++) {
+        const a = n * Math.PI / 6;
+        const x = center + Math.sin(a) * (radius - 44);
+        const y = center - Math.cos(a) * (radius - 44);
+        const active = n === h12;
+        if (active) {
+            ctx.beginPath();
+            ctx.arc(x, y, 20, 0, Math.PI * 2);
+            ctx.fillStyle = "#222";
+            ctx.fill();
+        }
+        ctx.font = "bold 20px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = active ? "#fff" : "#000";
+        ctx.fillText(n, x, y);
+    }
+}
+
+function snapped() {
+    const dispMins = Math.round(minuteF) % 60;
+    const dispHour = Math.round(hourF) % 24;
+    return { dispMins, dispHour };
+}
+
+function drawNumbers() {
+    const { dispHour } = snapped();
+    const h12 = dispHour % 12 || 12;
+    for (let n = 1; n <= 12; n++) {
+        const a = n * Math.PI / 6;
+        const x = center + Math.sin(a) * (radius - 44);
+        const y = center - Math.cos(a) * (radius - 44);
+        const active = n === h12;
+        if (active) {
+            ctx.beginPath();
+            ctx.arc(x, y, 20, 0, Math.PI * 2);
+            ctx.fillStyle = "#222";
+            ctx.fill();
+        }
+        ctx.font = "bold 20px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = active ? "#fff" : "#000";
+        ctx.fillText(n, x, y);
+    }
+}
+
+function drawHands() {
+    const { dispMins, dispHour } = snapped();
+    // Hour hand position: based purely on hour (+ slight minute offset for realism)
+    const h12 = dispHour % 12;
+    const hA  = (h12 + dispMins / 60) * Math.PI / 6;
+    const mA  = dispMins * Math.PI / 30;
+
+    // Hour
+    ctx.beginPath();
+    ctx.lineWidth = 6; ctx.lineCap = "round"; ctx.strokeStyle = "#000";
+    ctx.moveTo(center, center);
+    ctx.lineTo(center + Math.sin(hA) * radius * 0.5, center - Math.cos(hA) * radius * 0.5);
+    ctx.stroke();
+
+    // Minute
+    ctx.beginPath();
+    ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.strokeStyle = "#000";
+    ctx.moveTo(center, center);
+    ctx.lineTo(center + Math.sin(mA) * radius * 0.75, center - Math.cos(mA) * radius * 0.75);
+    ctx.stroke();
+
+    // Center dot
+    ctx.beginPath();
+    ctx.arc(center, center, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#000";
+    ctx.fill();
+}
+
+function updateDigital() {
+    const { dispMins, dispHour } = snapped();
+    const h24  = dispHour % 24;
+    const ampm = h24 < 12 ? "AM" : "PM";
+    const h    = h24 % 12 || 12;
+    document.getElementById("digitalTime").textContent =
+        h + ":" + String(dispMins).padStart(2, "0") + " " + ampm;
+}
+
+// ─── Angle helpers ────────────────────────────────────────────────────────────
+
+// Clockwise angle from 12 o'clock, in radians [-π, π]
+function getAngle(x, y) {
+    return Math.atan2(x - center, center - y);
+}
+
+// Shortest signed difference new - prev, in (-π, π]
+function angleDelta(newA, oldA) {
+    let d = newA - oldA;
+    if (d >  Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    return d;
+}
+
+// ─── Hit detection ────────────────────────────────────────────────────────────
+
+function detectHand(x, y) {
+    if (dragMode === "hour")   return "hour";
+    if (dragMode === "minute") return "minute";
+
+    const h12 = (Math.round(hourF) % 12) + minuteF / 60;
+    const mA  = minuteF * Math.PI / 30;
+    const hA  = h12 * Math.PI / 6;
+
+    const mx = center + Math.sin(mA) * radius * 0.75;
+    const my = center - Math.cos(mA) * radius * 0.75;
+    const hx = center + Math.sin(hA) * radius * 0.5;
+    const hy = center - Math.cos(hA) * radius * 0.5;
+
+    return Math.hypot(x - mx, y - my) <= Math.hypot(x - hx, y - hy) ? "minute" : "hour";
+}
+
+function getClickedNumber(x, y) {
+    for (let n = 1; n <= 12; n++) {
+        const a = n * Math.PI / 6;
+        const nx = center + Math.sin(a) * (radius - 44);
+        const ny = center - Math.cos(a) * (radius - 44);
+        if (Math.hypot(x - nx, y - ny) < 22) return n;
+    }
+    return null;
+}
+
+// ─── Pointer coords ───────────────────────────────────────────────────────────
+
+function coords(e) {
+    const r = canvas.getBoundingClientRect();
+    return {
+        x: (e.clientX - r.left) * (W / r.width),
+        y: (e.clientY - r.top)  * (W / r.height)
+    };
+}
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+canvas.addEventListener("pointerdown", (e) => {
+    const { x, y } = coords(e);
+
+    // Number tap → set hour
+    if (dragMode !== "minute") {
+        const n = getClickedNumber(x, y);
+        if (n !== null) {
+            const isPM = Math.round(hourF) >= 12;
+            hourF = (n % 12) + (isPM ? 12 : 0);
+            draw();
+            return;
+        }
+    }
+
+    dragging  = detectHand(x, y);
+    prevAngle = getAngle(x, y);
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("dragging");
+});
+
+canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+
+    const { x, y } = coords(e);
+    const angle = getAngle(x, y); // [-π, π], 0 = 12 o'clock, clockwise positive
+
+    if (dragging === "hour") {
+        // Map angle directly to hour position (1 full rotation = 12 hours)
+        // angle in [-π,π] → normalize to [0, 2π]
+        const normAngle = (angle + 2 * Math.PI) % (2 * Math.PI);
+        // 0..2π maps to 0..12 hours
+        const h12new = normAngle / (2 * Math.PI) * 12;
+        // Preserve AM/PM: keep the 0 or 12 offset
+        const isPM = Math.round(hourF) >= 12;
+        hourF = h12new + (isPM ? 12 : 0);
+    }
+
+    if (dragging === "minute") {
+        // Delta-based so crossing 12 carries into hours
+        const delta    = angleDelta(angle, prevAngle); // positive = clockwise
+        const deltaMins = delta * 60 / (2 * Math.PI);
+        minuteF += deltaMins;
+
+        // Carry minutes into hours
+        if (minuteF >= 60) { minuteF -= 60; hourF = (hourF + 1) % 24; }
+        if (minuteF <   0) { minuteF += 60; hourF = (hourF - 1 + 24) % 24; }
+    }
+
+    prevAngle = angle;
+    draw();
+});
+
+canvas.addEventListener("pointerup",     () => { dragging = null; prevAngle = null; canvas.classList.remove("dragging"); });
+canvas.addEventListener("pointercancel", () => { dragging = null; prevAngle = null; canvas.classList.remove("dragging"); });
+
+// ─── Set to now ───────────────────────────────────────────────────────────────
+
+function setToNow() {
+    const now = new Date();
+    hourF   = now.getHours();
+    minuteF = now.getMinutes();
+    draw();
+}
+
+draw();
+</script>
+</body>
+</html>
